@@ -1,0 +1,1170 @@
+# Situation 1
+
+```{r}
+
+lambda_A <- 5  # rate of arrival, 5 customers per hour
+lambda_S <- 6  # rate of service, mean service time = 1/6 hours
+operating_hours <- 12  # total operating time in hours
+
+simulate_day <- function(seed) {
+  set.seed(seed)  # for reproducibility
+
+  # Generate inter-arrival times
+  inter_arrival_times <- rexp(n = 1000, rate = lambda_A)  # generate more than needed
+  arrival_times <- cumsum(inter_arrival_times)
+  arrival_times <- arrival_times[arrival_times <= operating_hours]  # only within operating hours
+  service_times <- rexp(length(arrival_times), rate = lambda_S)
+  waiting_times <- rep(0, length(arrival_times))
+
+  # Calculate waiting times
+  for (i in 2:length(arrival_times)) {
+    previous_customer_leaves <- arrival_times[i-1] + waiting_times[i-1] + service_times[i-1]
+    if (previous_customer_leaves > arrival_times[i]) {
+      waiting_times[i] <- previous_customer_leaves - arrival_times[i]
+    }
+  }
+
+  start_service_times <- arrival_times + waiting_times
+  finish_service_times <- start_service_times + service_times
+
+  # Exclude customers whose service would start after 12 hours
+  valid_indices <- start_service_times <= operating_hours
+
+  data.frame(
+    Customer = 1:sum(valid_indices),
+    ArrivalTime = arrival_times[valid_indices],
+    ServiceTime = service_times[valid_indices],
+    WaitingTime = waiting_times[valid_indices],
+    StartServiceTime = start_service_times[valid_indices],
+    FinishServiceTime = start_service_times[valid_indices] + service_times[valid_indices]
+  )
+}
+
+collect_multiple_days_data <- function(num_days) {
+  all_days_results <- lapply(1:num_days, simulate_day)
+  
+  # Combine all days data into one data frame
+  combined_results <- do.call(rbind, all_days_results)
+  combined_results$Day <- rep(1:num_days, sapply(all_days_results, nrow))
+  
+  combined_results
+}
+
+```
+
+```{r}
+
+to_hours_minutes <- function(time_in_hours) {
+  hours <- floor(time_in_hours)
+  minutes <- round((time_in_hours - hours) * 60)
+  return(sprintf("%02d:%02d", hours, minutes))
+}
+
+results <- collect_multiple_days_data(500)
+
+formatted_results <- results
+formatted_results$ArrivalTime <- sapply(formatted_results$ArrivalTime, to_hours_minutes)
+formatted_results$ServiceTime <- sapply(formatted_results$ServiceTime, to_hours_minutes)
+formatted_results$WaitingTime <- sapply(formatted_results$WaitingTime, to_hours_minutes)
+formatted_results$StartServiceTime <- sapply(formatted_results$StartServiceTime, to_hours_minutes)
+formatted_results$FinishServiceTime <- sapply(formatted_results$FinishServiceTime, to_hours_minutes)
+
+# Now the formatted_results dataframe is ready for display or reporting
+print(formatted_results)
+```
+
+```{r}
+library(dplyr)
+
+# Assuming 'results' is your data frame from the simulation
+summary_stats <- results |>
+  summarise(
+    MinWaitingTime = min(WaitingTime),
+    MaxWaitingTime = max(WaitingTime),
+    MeanWaitingTime = mean(WaitingTime),
+    VarianceWaitingTime = var(WaitingTime)
+  )
+
+print(summary_stats)
+
+#convert to hours: minutes?
+
+```
+
+```{r}
+# Assuming results$WaitingTimeNumeric contains the numeric waiting times
+hist(results$WaitingTime, breaks = 20, col = "blue", main = "Histogram of Waiting Times", xlab = "Waiting Time (hours)", ylab = "Frequency")
+
+```
+
+Summarize the proportion of people that arrive that have no waiting time. If they wait, how long is the average wait. (get rid of 0s and take average)
+
+```{r}
+# Setting up increments (0, 10, 20, ..., 60 minutes)
+increments_minutes <- seq(0, 60, by = 10)
+increments_hours <- increments_minutes / 60  # Convert minutes to hours for comparison
+
+# Initialize a vector to store the results
+proportions <- numeric(length(increments_hours))
+names(proportions) <- paste(increments_minutes, "minutes")
+
+# Calculate proportions
+total_people <- length(results$WaitingTime)
+for (i in seq_along(increments_hours)) {
+    people_waiting_less_than_equal_to_current_increment <- sum(results$WaitingTime <= increments_hours[i])
+    proportions[i] <- (people_waiting_less_than_equal_to_current_increment / total_people) * 100  # Convert to percentage
+}
+
+# Print the results
+proportions
+```
+
+```{r}
+
+# Using ggplot2 to plot the CDF
+library(ggplot2)
+
+ggplot(data = results, aes(x = WaitingTime)) +
+  stat_ecdf(geom = "step") +
+  labs(title = "Cumulative Distribution of Waiting Times",
+       x = "Waiting Time (hours)",
+       y = "Cumulative Proportion") +
+  geom_hline(yintercept = 0.50, linetype="dashed", color = "red")  # Example line at 50%
+
+
+```
+
+```{r}
+# Assuming results$WaitingTime contains your waiting times
+
+# Filter out waiting times that are zero
+positive_waiting_times <- results$WaitingTime[results$WaitingTime > 0]
+
+# Calculate the mean of these positive waiting times
+mean_positive_waiting_time <- mean(positive_waiting_times)
+var_pos_wt <- var(positive_waiting_times)
+
+# Print the mean waiting time among people that wait
+print(paste("Mean waiting time among people that wait:", mean_positive_waiting_time, "hours"))
+print(paste("Var waiting time among people that wait:", var_pos_wt, "hours"))
+
+```
+
+```{r}
+
+# Assuming results$StartServiceTime is in decimal hours
+# Calculate the HourOfDay rounded to the nearest tenth of an hour
+results$TenthHourOfDay <- round(results$StartServiceTime * 10) / 10
+
+# Group by TenthHourOfDay and calculate mean waiting time
+average_waiting_times_by_tenth_hour <- results %>%
+  group_by(TenthHourOfDay) %>%
+  summarise(MeanWaitingTime = mean(WaitingTime, na.rm = TRUE))  # Ensure NA values are ignored
+
+# Plotting the mean waiting times throughout the day
+ggplot(average_waiting_times_by_tenth_hour, aes(x = TenthHourOfDay, y = MeanWaitingTime)) +
+  geom_smooth(method = "loess", color = "red", se = FALSE) +  # Add a smooth line (LOESS)
+  labs(title = "Mean Waiting Time by Time of Day (λS = 9)",
+       x = "Time of Day (hours)",
+       y = "Mean Waiting Time (hours)") +
+  theme_minimal()
+
+```
+
+```{r}
+
+variance_waiting_times_by_tenth_hour <- results %>%
+  group_by(TenthHourOfDay) %>%
+  summarise(VarianceWaitingTime = var(WaitingTime, na.rm = TRUE))  # Ensure NA values are ignored
+
+ggplot(variance_waiting_times_by_tenth_hour, aes(x = TenthHourOfDay, y = VarianceWaitingTime)) +
+  geom_smooth(method = "loess", color = "red", se = FALSE) +  # Add a smooth line (LOESS)
+  labs(title = "Variance in Waiting Time by Time of Day (λS = 9)",
+       x = "Time of Day (hours)",
+       y = "Variance in Waiting Time") +
+  theme_minimal()
+
+```
+
+```{r}
+
+num_days <- 1000  # Number of days to simulate
+
+# Function to calculate downtime for a single day
+calculate_downtime <- function(day_results) {
+  # Initialize vector to store waiting counts for each minute of the day
+  waiting_count <- rep(0, operating_hours * 60)  
+
+  for (i in 1:nrow(day_results)) {
+    # Convert service times to minutes
+    start_minute <- as.numeric(day_results$StartServiceTime[i] * 60)
+    end_minute <- as.numeric(day_results$FinishServiceTime[i] * 60)
+    
+    # Increment waiting count for each minute between start and finish service times
+    if (!is.na(start_minute) && !is.na(end_minute)) {
+      waiting_count[start_minute:end_minute] <- waiting_count[start_minute:end_minute] + 1
+    }
+  }
+
+  # Calculate downtime (nobody in the restaurant)
+  downtime <- sum(waiting_count == 0) / 60  # Convert minutes to hours
+  
+  return(downtime)
+}
+
+
+# Simulate multiple days and calculate downtime for each day
+downtimes <- numeric(num_days)
+for (day in 1:num_days) {
+  day_results <- simulate_day(day)
+  downtimes[day] <- calculate_downtime(day_results)
+}
+
+# Calculate mean and variance of downtimes
+mean_downtime <- mean(downtimes, na.rm = TRUE)
+variance_downtime <- var(downtimes, na.rm = TRUE)
+
+# Print mean and variance
+print(paste("Mean Downtime:", mean_downtime, "hours"))
+print(paste("Variance in Downtime:", variance_downtime))
+```
+
+```{r}
+hist(downtimes, breaks = 100, col = "blue", main = "Histogram of Downtimes", xlab = "Downtime (hours)", ylab = "Frequency")
+```
+
+```{r}
+
+# Initialize a vector to store the total number of customers in line for each minute of the day
+total_customers_in_line <- rep(0, operating_hours * 60)
+
+# Simulate multiple days and calculate the total number of customers in line for each minute
+for (day in 1:num_days) {
+  day_results <- simulate_day(day)
+  
+  # Convert start and finish service times to minutes
+  start_minutes <- as.integer(day_results$StartServiceTime * 60)
+  end_minutes <- as.integer(day_results$FinishServiceTime * 60)
+  
+  # Increment the number of customers in line for each minute between start and finish service times
+  for (i in seq_along(start_minutes)) {
+    total_customers_in_line[start_minutes[i]:end_minutes[i]] <- total_customers_in_line[start_minutes[i]:end_minutes[i]] + 1
+  }
+}
+
+# Calculate the average number of customers in line for each minute of the day across all days
+average_customers_in_line <- total_customers_in_line / num_days
+
+# Create a sequence of time points corresponding to each minute of the day
+time_points <- seq(0, operating_hours * 60 - 1)
+
+average_customers_in_line <- head(average_customers_in_line, length(time_points))
+
+
+# Plot the average number of customers in line throughout times of the day
+plot(time_points / 60, average_customers_in_line, type = "l", col = "blue",
+     xlab = "Time (hours)", ylab = "Average Number of Customers in Line",
+     main = "Average Number of Customers in Line Throughout the Day")
+
+
+```
+
+```{r}
+
+num_customers_in_line <- matrix(0, nrow = num_days, ncol = operating_hours * 60)
+
+# Simulate multiple days and calculate the number of customers in line for each minute
+for (day in 1:num_days) {
+  day_results <- simulate_day(day)
+  
+  # Convert start and finish service times to minutes
+  start_minutes <- as.integer(day_results$StartServiceTime * 60)
+  end_minutes <- as.integer(day_results$FinishServiceTime * 60)
+  
+  # Ensure start_minutes and end_minutes are within the bounds of the matrix
+  start_minutes <- pmax(start_minutes, 1)
+  end_minutes <- pmin(end_minutes, operating_hours * 60)
+  
+  # Increment the number of customers in line for each minute between start and finish service times
+  for (i in seq_along(start_minutes)) {
+    num_customers_in_line[day, start_minutes[i]:end_minutes[i]] <- 
+      num_customers_in_line[day, start_minutes[i]:end_minutes[i]] + 1
+  }
+}
+
+# Calculate the variance in the number of customers in line for each minute of the day
+variance_customers_in_line <- apply(num_customers_in_line, 2, var)
+
+# Create a sequence of time points corresponding to each minute of the day
+time_points <- seq(0, operating_hours * 60 - 1)
+
+# Plot the variance in the number of customers in line throughout times of the day
+plot(time_points / 60, variance_customers_in_line, type = "l", col = "blue",
+     xlab = "Time (hours)", ylab = "Variance in Number of Customers in Line",
+     main = "Variance in Number of Customers in Line Throughout the Day")
+```
+
+### Adjusting for Peak Hours
+
+```{r}
+lambda_morning_afternoon_night <- 2  # Before lunch and after lunch to before dinner
+lambda_peak <- 7 # During lunch (12-3) and dinner (6-9)
+lambda_S <- 9  # rate of service, mean service time = 1/9 hours
+operating_hours <- 12  # total operating time in hours
+
+# Define time breaks in hours from 10 AM (0 hours from start)
+time_breaks <- c(0, 2, 4, 8, 10, 12)  # 10 AM to 12 PM, 12 PM to 2 PM, 3 PM to 6 PM, 6 PM to 8 PM, 8 PM to 10 PM
+rates <- c(lambda_morning_afternoon_night, lambda_peak, lambda_morning_afternoon_night, lambda_peak, lambda_morning_afternoon_night)
+
+# Function to generate arrivals for a single interval
+generate_arrivals <- function(start_time, end_time, rate) {
+  inter_arrival_times <- rexp(1000, rate)  # Generate more than needed
+  arrivals <- cumsum(inter_arrival_times) + start_time  # Shift by start time
+  arrivals[arrivals <= end_time]  # Filter arrivals within the time interval
+}
+
+# Function to simulate a day
+simulate_day <- function(seed) {
+  set.seed(seed)  # for reproducibility
+  
+  # Generate arrivals for each interval
+  all_arrivals <- numeric(0)  # Initialize an empty vector
+  for (i in 1:(length(time_breaks)-1)) {
+    all_arrivals <- c(all_arrivals, generate_arrivals(time_breaks[i], time_breaks[i+1], rates[i]))
+  }
+  
+  # Generate service times
+  service_times <- rexp(length(all_arrivals), rate = lambda_S)
+  
+  # Initialize waiting times vector
+  waiting_times <- rep(0, length(all_arrivals))
+  
+  # Calculate waiting times based on previous customer's finish time
+  for (i in 2:length(all_arrivals)) {
+    previous_customer_finish <- all_arrivals[i-1] + waiting_times[i-1] + service_times[i-1]
+    if (previous_customer_finish > all_arrivals[i]) {
+      waiting_times[i] <- previous_customer_finish - all_arrivals[i]
+    }
+  }
+  
+  # Calculate start and finish service times
+  start_service_times <- all_arrivals + waiting_times
+  finish_service_times <- start_service_times + service_times
+  
+  # Exclude customers whose service would start after operating hours
+  valid_indices <- start_service_times <= operating_hours
+  
+  # Create data frame for the day's results
+  day_results <- data.frame(
+    Customer = 1:sum(valid_indices),
+    ArrivalTime = all_arrivals[valid_indices],
+    ServiceTime = service_times[valid_indices],
+    WaitingTime = waiting_times[valid_indices],
+    StartServiceTime = start_service_times[valid_indices],
+    FinishServiceTime = finish_service_times[valid_indices]
+  )
+  
+  return(day_results)
+}
+
+# Function to collect data over multiple days
+collect_multiple_days_data <- function(num_days) {
+  all_days_results <- lapply(1:num_days, simulate_day)
+  
+  # Combine all days data into one data frame
+  combined_results <- do.call(rbind, all_days_results)
+  combined_results$Day <- rep(1:num_days, sapply(all_days_results, nrow))
+  
+  return(combined_results)
+}
+
+```
+
+```{r}
+
+to_hours_minutes <- function(time_in_hours) {
+  hours <- floor(time_in_hours)
+  minutes <- round((time_in_hours - hours) * 60)
+  return(sprintf("%02d:%02d", hours, minutes))
+}
+
+results <- collect_multiple_days_data(500)
+
+formatted_results <- results
+formatted_results$ArrivalTime <- sapply(formatted_results$ArrivalTime, to_hours_minutes)
+formatted_results$ServiceTime <- sapply(formatted_results$ServiceTime, to_hours_minutes)
+formatted_results$WaitingTime <- sapply(formatted_results$WaitingTime, to_hours_minutes)
+formatted_results$StartServiceTime <- sapply(formatted_results$StartServiceTime, to_hours_minutes)
+formatted_results$FinishServiceTime <- sapply(formatted_results$FinishServiceTime, to_hours_minutes)
+
+# Now the formatted_results dataframe is ready for display or reporting
+print(formatted_results)
+```
+
+```{r}
+
+results$TenthHourOfDay <- round(results$StartServiceTime * 10) / 10
+
+# Group by TenthHourOfDay and calculate mean waiting time
+average_waiting_times_by_tenth_hour <- results %>%
+  group_by(TenthHourOfDay) %>%
+  summarise(MeanWaitingTime = mean(WaitingTime, na.rm = TRUE))  # Ensure NA values are ignored
+
+# Plotting the mean waiting times throughout the day
+ggplot(average_waiting_times_by_tenth_hour, aes(x = TenthHourOfDay, y = MeanWaitingTime)) +
+  geom_smooth(method = "loess", color = "red", se = FALSE) +  # Add a smooth line (LOESS)
+  labs(title = "Mean Waiting Time by Time of Day",
+       x = "Time of Day (hours)",
+       y = "Mean Waiting Time (hours)") +
+  theme_minimal()
+```
+
+You can adjust lamda_S to make the peak hours more pronounced on this wait times graph. As the rate parameter is low for service time, the kitchen can't keep up with the inflow of cutomers at peak hours, and they never get back to low wait times in non-peak hours. However, if lamda_S is higher, once less people start arriving in non-peak hours, they are able to serve everyone waiting in line and get back to low wait times. **\*\*for paper, would be good to include two of these graphs - one with given lamda_S (6) and one with higher lamda_S (9).**
+
+```{r}
+variance_waiting_times_by_tenth_hour <- results %>%
+  group_by(TenthHourOfDay) %>%
+  summarise(VarianceWaitingTime = var(WaitingTime, na.rm = TRUE))  # Ensure NA values are ignored
+
+ggplot(variance_waiting_times_by_tenth_hour, aes(x = TenthHourOfDay, y = VarianceWaitingTime)) +
+  geom_smooth(method = "loess", color = "red", se = FALSE) +  # Add a smooth line (LOESS)
+  labs(title = "Variance in Waiting Time by Time of Day",
+       x = "Time of Day (hours)",
+       y = "Variance in Waiting Time") +
+  theme_minimal()
+```
+
+```{r}
+# Initialize a vector to store the total number of customers in line for each minute of the day
+total_customers_in_line <- rep(0, operating_hours * 60)
+
+# Simulate multiple days and calculate the total number of customers in line for each minute
+for (day in 1:num_days) {
+  day_results <- simulate_day(day)
+  
+  # Convert start and finish service times to minutes
+  start_minutes <- as.integer(day_results$StartServiceTime * 60)
+  end_minutes <- as.integer(day_results$FinishServiceTime * 60)
+  
+  # Increment the number of customers in line for each minute between start and finish service times
+  for (i in seq_along(start_minutes)) {
+    total_customers_in_line[start_minutes[i]:end_minutes[i]] <- total_customers_in_line[start_minutes[i]:end_minutes[i]] + 1
+  }
+}
+
+# Calculate the average number of customers in line for each minute of the day across all days
+average_customers_in_line <- total_customers_in_line / num_days
+
+# Create a sequence of time points corresponding to each minute of the day
+time_points <- seq(0, operating_hours * 60 - 1)
+
+average_customers_in_line <- head(average_customers_in_line, length(time_points))
+
+
+# Plot the average number of customers in line throughout times of the day
+plot(time_points / 60, average_customers_in_line, type = "l", col = "blue",
+     xlab = "Time (hours)", ylab = "Average Number of Customers in Line",
+     main = "Average Number of Customers in Line Throughout the Day")
+
+```
+
+```{r}
+
+# Initialize a matrix to store the number of customers in line for each minute of each day
+num_customers_in_line <- matrix(0, nrow = num_days, ncol = operating_hours * 60)
+
+# Simulate multiple days and calculate the number of customers in line for each minute
+for (day in 1:num_days) {
+  day_results <- simulate_day(day)
+  
+  # Convert start and finish service times to minutes
+  start_minutes <- as.integer(day_results$StartServiceTime * 60)
+  end_minutes <- as.integer(day_results$FinishServiceTime * 60)
+  
+  # Ensure start_minutes and end_minutes are within the bounds of the matrix
+  start_minutes <- pmax(start_minutes, 1)
+  end_minutes <- pmin(end_minutes, operating_hours * 60)
+  
+  # Increment the number of customers in line for each minute between start and finish service times
+  for (i in seq_along(start_minutes)) {
+    num_customers_in_line[day, start_minutes[i]:end_minutes[i]] <- 
+      num_customers_in_line[day, start_minutes[i]:end_minutes[i]] + 1
+  }
+}
+
+# Calculate the variance in the number of customers in line for each minute of the day
+variance_customers_in_line <- apply(num_customers_in_line, 2, var)
+
+# Create a sequence of time points corresponding to each minute of the day
+time_points <- seq(0, operating_hours * 60 - 1)
+
+# Plot the variance in the number of customers in line throughout times of the day
+plot(time_points / 60, variance_customers_in_line, type = "l", col = "blue",
+     xlab = "Time (hours)", ylab = "Variance in Number of Customers in Line",
+     main = "Variance in Number of Customers in Line Throughout the Day")
+
+```
+
+# Situation 2
+
+```{r}
+L <- 1  # Number of chefs
+lambda_S <- 3 * L  # Service rate, 3 times the number of chefs
+lambda_A <- 10  # Average arrival rate
+operating_hours <- 12  # From 10 AM to 10 PM
+num_tables <- 5  # Number of available tables
+meal_price <- 50  # Price per meal
+chef_wage_per_hour <- 40  # Chef wage per hour
+```
+
+```{r}
+
+simulate_day <- function(seed) {
+  set.seed(seed)  # for reproducibility
+
+  # Generate inter-arrival times
+  inter_arrival_times <- rexp(n = 1000, rate = lambda_A)  # generate more than needed
+  arrival_times <- cumsum(inter_arrival_times)
+  arrival_times <- arrival_times[arrival_times <= operating_hours]  # only within operating hours
+  service_times <- rexp(length(arrival_times), rate = lambda_S)
+  
+  waiting_times <- rep(0, length(arrival_times))
+
+  # Calculate waiting times
+  for (i in 1:length(arrival_times)) {
+  if (i > num_tables) {  # Only calculate waiting times if there are more customers than tables
+    # Find finish times for the last `num_tables` customers before the ith customer
+    previous_finishes <- arrival_times[(i-num_tables):(i-1)] + waiting_times[(i-num_tables):(i-1)] + service_times[(i-num_tables):(i-1)]
+
+    # Calculate waiting time if necessary
+    if (min(previous_finishes) > arrival_times[i]) {
+      waiting_times[i] <- min(previous_finishes) - arrival_times[i]
+    }
+  }
+}
+
+  start_service_times <- arrival_times + waiting_times
+  finish_service_times <- start_service_times + service_times
+
+  # Exclude customers whose service would start after 12 hours
+  valid_indices <- start_service_times <= operating_hours
+
+  data.frame(
+    Customer = 1:sum(valid_indices),
+    ArrivalTime = arrival_times[valid_indices],
+    ServiceTime = service_times[valid_indices],
+    WaitingTime = waiting_times[valid_indices],
+    StartServiceTime = start_service_times[valid_indices],
+    FinishServiceTime = finish_service_times[valid_indices]
+  )
+}
+
+collect_multiple_days_data <- function(num_days) {
+  all_days_results <- lapply(1:num_days, simulate_day)
+  
+  # Combine all days data into one data frame
+  combined_results <- do.call(rbind, all_days_results)
+  combined_results$Day <- rep(1:num_days, sapply(all_days_results, nrow))
+  
+  return(combined_results)
+}
+```
+
+```{r}
+to_hours_minutes <- function(time_in_hours) {
+  hours <- floor(time_in_hours)
+  minutes <- round((time_in_hours - hours) * 60)
+  return(sprintf("%02d:%02d", hours, minutes))
+}
+
+results <- collect_multiple_days_data(500)
+
+formatted_results <- results
+formatted_results$ArrivalTime <- sapply(formatted_results$ArrivalTime, to_hours_minutes)
+formatted_results$ServiceTime <- sapply(formatted_results$ServiceTime, to_hours_minutes)
+formatted_results$WaitingTime <- sapply(formatted_results$WaitingTime, to_hours_minutes)
+formatted_results$StartServiceTime <- sapply(formatted_results$StartServiceTime, to_hours_minutes)
+formatted_results$FinishServiceTime <- sapply(formatted_results$FinishServiceTime, to_hours_minutes)
+
+# Now the formatted_results dataframe is ready for display or reporting
+print(formatted_results)
+```
+
+```{r}
+
+# Assuming 'results' is your data frame from the simulation
+summary_stats <- results %>%
+  summarise(
+    MinWaitingTime = min(WaitingTime),
+    MaxWaitingTime = max(WaitingTime),
+    MeanWaitingTime = mean(WaitingTime),
+    VarianceWaitingTime = var(WaitingTime)
+  )
+
+print(summary_stats)
+```
+
+```{r}
+
+hist(results$WaitingTime, breaks = 20, col = "blue", main = "Histogram of Waiting Times", xlab = "Waiting Time (hours)", ylab = "Frequency")
+```
+
+```{r}
+
+# Setting up increments (0, 10, 20, ..., 60 minutes)
+increments_minutes <- seq(0, 60, by = 10)
+increments_hours <- increments_minutes / 60  # Convert minutes to hours for comparison
+
+# Initialize a vector to store the results
+proportions <- numeric(length(increments_hours))
+names(proportions) <- paste(increments_minutes, "minutes")
+
+# Calculate proportions
+total_people <- length(results$WaitingTime)
+for (i in seq_along(increments_hours)) {
+    people_waiting_less_than_equal_to_current_increment <- sum(results$WaitingTime <= increments_hours[i])
+    proportions[i] <- (people_waiting_less_than_equal_to_current_increment / total_people) * 100  # Convert to percentage
+}
+
+# Print the results
+proportions
+```
+
+```{r}
+
+# Assuming results$WaitingTime contains your waiting times
+
+# Filter out waiting times that are zero
+positive_waiting_times <- results$WaitingTime[results$WaitingTime > 0]
+
+# Calculate the mean of these positive waiting times
+mean_positive_waiting_time <- mean(positive_waiting_times)
+
+# Print the mean waiting time among people that wait
+print(paste("Mean waiting time among people that wait:", mean_positive_waiting_time, "hours"))
+
+```
+
+```{r}
+
+num_days <- 1000  # Number of days to simulate
+
+# Function to calculate downtime for a single day
+calculate_downtime <- function(day_results) {
+  # Initialize vector to store the number of tables occupied at each minute of the day
+  tables_occupied <- rep(0, (operating_hours) * 60)
+
+  for (i in 1:nrow(day_results)) {
+    # Convert service start and end times to minute indexes
+    start_minute <- as.numeric(day_results$StartServiceTime[i] * 60)
+    end_minute <- as.numeric(day_results$FinishServiceTime[i] * 60)
+
+    # Increment the count of tables occupied for each minute during the service time
+    
+    if (start_minute > 0 && end_minute <= length(tables_occupied)) {
+      tables_occupied[start_minute:end_minute] <- tables_occupied[start_minute:end_minute] + 1
+    }
+  }
+    
+
+  # Calculate downtime as periods when no tables are occupied (0 tables occupied)
+  downtime <- sum(tables_occupied == 0) / 60  # Convert minutes to hours
+
+  return(downtime)
+}
+
+# Simulate multiple days and calculate downtime for each day
+downtimes <- numeric(num_days)
+for (day in 1:num_days) {
+  day_results <- simulate_day(day)
+  downtimes[day] <- calculate_downtime(day_results)
+}
+
+# Calculate mean and variance of downtimes
+mean_downtime <- mean(downtimes, na.rm = TRUE)
+variance_downtime <- var(downtimes, na.rm = TRUE)
+
+# Print mean and variance
+print(paste("Mean Downtime:", mean_downtime, "hours"))
+print(paste("Variance in Downtime:", variance_downtime))
+```
+
+```{r}
+
+hist(downtimes, breaks = 20, col = "blue", main = "Histogram of Downtimes", xlab = "Downtime (hours)", ylab = "Frequency")
+```
+
+```{r}
+# Initialize a vector to store the total number of customers being served at each minute of the day
+total_customers_being_served <- rep(0, operating_hours * 60)
+
+# Simulate multiple days and calculate the total number of customers being served each minute
+for (day in 1:num_days) {
+  day_results <- simulate_day(day)
+  
+  # Convert start and finish service times to minutes
+  start_minutes <- as.integer(day_results$StartServiceTime * 60)
+  end_minutes <- as.integer(day_results$FinishServiceTime * 60)
+  
+  # Increment the number of customers being served for each minute between start and finish service times
+  for (i in seq_along(start_minutes)) {
+    if (start_minutes[i] <= end_minutes[i]) {
+      total_customers_being_served[start_minutes[i]:end_minutes[i]] <- total_customers_being_served[start_minutes[i]:end_minutes[i]] + 1
+    }
+  }
+}
+
+# Calculate the average number of customers in line (exceeding the number of tables) for each minute of the day across all days
+average_customers_in_line <- pmax(total_customers_being_served / num_days - num_tables, 0)
+
+# Create a sequence of time points corresponding to each minute of the day
+time_points <- seq(0, operating_hours * 60 - 1)
+
+average_customers_in_line <- head(average_customers_in_line, length(time_points))
+
+# Plot the average number of customers in line throughout times of the day
+plot(time_points / 60, average_customers_in_line, type = "l", col = "blue",
+     xlab = "Time (hours)", ylab = "Average Number of Customers in Line",
+     main = "Average Number of Customers in Line Throughout the Day")
+
+```
+
+#insert variance plot.
+
+```{r}
+
+# Initialize a vector to store the total number of customers being served at each minute of the day
+total_customers_being_served <- rep(0, operating_hours * 60)
+
+# Simulate multiple days and calculate the total number of customers being served each minute
+for (day in 1:num_days) {
+  day_results <- simulate_day(day)
+  
+  # Convert start and finish service times to minutes
+  start_minutes <- as.integer(day_results$StartServiceTime * 60)
+  end_minutes <- as.integer(day_results$FinishServiceTime * 60)
+  
+  # Increment the number of customers being served for each minute between start and finish service times
+  for (i in seq_along(start_minutes)) {
+    if (start_minutes[i] <= end_minutes[i]) {
+      total_customers_being_served[start_minutes[i]:end_minutes[i]] <- total_customers_being_served[start_minutes[i]:end_minutes[i]] + 1
+    }
+  }
+}
+
+# Calculate the average number of customers in line (exceeding the number of tables) for each minute of the day across all days
+average_customers_being_served <- pmax(total_customers_being_served / num_days, 0)
+
+# Create a sequence of time points corresponding to each minute of the day
+time_points <- seq(0, operating_hours * 60 - 1)
+
+average_customers_being_served <- head(average_customers_being_served, length(time_points))
+
+# Plot the average number of customers in line throughout times of the day
+plot(time_points / 60, average_customers_being_served, type = "l", col = "blue",
+     xlab = "Time (hours)", ylab = "Average Number of Customers Being Served",
+     main = "Average Number of Customers Being Served Throughout the Day")
+```
+
+```{r}
+
+# Collect the number of customers served each day
+daily_customers_served <- aggregate(Customer ~ Day, data = results, FUN = length)
+
+# Calculate daily revenue and wages
+daily_revenue <- daily_customers_served$Customer * meal_price
+daily_wages <- L * chef_wage_per_hour * (operating_hours + 1)
+
+# Calculate daily profit
+daily_profits <- daily_revenue - daily_wages
+
+# Plot histogram of daily profits
+hist(daily_profits, col = "blue", main = "Histogram of Daily Profits", xlab = "Profit ($)", breaks = 30)
+
+# Calculate and print variance of daily profits
+
+```
+
+```{r}
+# Calculate mean, standard deviation, and variance of daily profits
+mean_profits <- mean(daily_profits)
+sd_profits <- sd(daily_profits)
+variance_profits <- var(daily_profits)
+
+# Display the results
+print(paste("Mean of Daily Profits:", mean_profits))
+print(paste("Standard Deviation of Daily Profits:", sd_profits))
+print(paste("Variance of Daily Profits:", variance_profits))
+
+# Check a sample of daily profits to spot any anomalies
+print(min(daily_profits))
+print(max(daily_profits))
+```
+
+The chefs should be getting paid for 13 hours - if someone gets served 10pm, but their finish service time (arrival + wait + service) is greater than 10pm, then the chefs are working past the 12 hour mark. We also have to account for prep time before the restaurant opens.
+
+When a lot of people come, and there's wait times before 10pm and start service times past 10pm, it's possible for people to not be sat until much later (after 11pm, or even the next day if there's immense demand and little chefs/tables). Excluding customers with finish eating times after 11pm when claculting profits allows us to account for the fact that **having more chefs and more tables would increase our revenues, given people are waiting outside to be served.**
+
+## Find the number of chefs that optimize profits:
+
+```{r}
+
+# Parameters
+lambda_A <- 10  # Average arrival rate per hour
+operating_hours <- 12  # From 10 AM to 10 PM
+num_tables <- 5  # Number of available tables
+meal_price <- 50  # Price per meal
+chef_wage_per_hour <- 40  # Chef wage per hour
+
+# Set seed for reproducibility
+
+# Function to simulate the restaurant operation
+simulate_restaurant <- function(num_chefs) {
+    lambda_S <- 3 * num_chefs  # Service rate, 3 times the number of chefs
+    
+    # Generate Poisson arrivals
+    inter_arrival_times <- rexp(1000, rate = lambda_A)
+    arrival_times <- cumsum(inter_arrival_times)
+    arrival_times <- arrival_times[arrival_times <= operating_hours]
+
+    # Generate service times
+    service_times <- rexp(length(arrival_times), rate = lambda_S)
+
+    # Initialize waiting times
+    waiting_times <- rep(0, length(arrival_times))
+
+    # Calculate waiting times considering the number of tables
+    for (i in 1:length(arrival_times)) {
+        if (i > num_tables) {
+            previous_finishes <- arrival_times[(i-num_tables):(i-1)] + waiting_times[(i-num_tables):(i-1)] + service_times[(i-num_tables):(i-1)]
+            if (min(previous_finishes) > arrival_times[i]) {
+                waiting_times[i] <- min(previous_finishes) - arrival_times[i]
+            }
+        }
+    }
+    
+    start_service_times <- arrival_times + waiting_times
+    finish_service_times <- start_service_times + service_times
+    finish_service_times <- finish_service_times[finish_service_times <= operating_hours + 1]
+
+    # Financial metrics
+    num_customers_served <- length(finish_service_times)
+    total_revenue <- num_customers_served * meal_price
+    total_wages <- num_chefs * chef_wage_per_hour * (operating_hours + 1)
+    profit <- total_revenue - total_wages
+    
+    mean_waiting_time <- mean(waiting_times)
+    
+    return(list(profit = profit, mean_waiting_time = mean_waiting_time))
+}
+```
+
+```{r}
+
+# Test different numbers of chefs to find the optimal number for maximizing profit
+max_chefs <- 10  # Maximum number of chefs to consider
+num_simulations <- 100  # Number of simulations per chef configuration
+average_profits <- numeric(max_chefs)
+average_wait_times <- numeric(max_chefs)
+variance_profits <- numeric(max_chefs)
+
+
+set.seed(200)  # Optional, for reproducibility
+
+for (num_chefs in 1:max_chefs) {
+    results <- replicate(num_simulations, simulate_restaurant(num_chefs), simplify = FALSE)
+    profits <- sapply(results, function(x) x$profit)  # Extract profits for each simulation
+    average_profits[num_chefs] <- mean(profits)
+    variance_profits[num_chefs] <- var(profits)
+    average_wait_times[num_chefs] <- mean(sapply(results, function(x) x$mean_waiting_time))
+}
+
+# Find the optimal number of chefs
+optimal_chefs <- which.max(average_profits)
+
+plot(1:max_chefs, average_profits, type = 'b', col = 'blue', xlab = "Number of Chefs", ylab = "Average Profit", main = "Average Profit Optimization by Number of Chefs")
+points(optimal_chefs, average_profits[optimal_chefs], col = "red", pch = 19, cex = 2)
+```
+
+```{r}
+plot(1:max_chefs, variance_profits, type = 'b', col = 'green', xlab = "Number of Chefs", ylab = "Variance in Profit", main = "Variance in Daily Profits by Number of Chefs")
+
+```
+
+I don't think this variance plot shows much.
+
+```{r}
+plot(1:max_chefs, average_wait_times, type = 'b', col = 'blue', xlab = "Number of Chefs", ylab = "Average Wait Time (hours)", main = "Average Wait Time by Number of Chefs")
+```
+
+We see that profits go steadily down as the number of chefs go up in this framework.
+
+In any framework, the wait times go steadily down as the number of chefs increase.
+
+The reason that profits go down with number of chefs for tables = 5 and 10 = lambdaA is that there is very little wait time under these conditions, even with only one chef. So, increasing chefs doesn't allow us to get through people quicker, as we're able to get through everyone anyways. All adding chefs does would increase costs.
+
+When more people start arriving per hour, or there's less tables in the restaurant, then wait times will pile up. In that case, having more chefs would increase revenues because we're able to serve people faster and seat people that previously couldn't get into the restaurant due to the wait times. In such situations, increases in revenues could outweigh increases in the cost of chefs, so having more than one chef would be advantageous.
+
+### Peak Hours with Part-Time Chefs
+
+```{r}
+# Constants
+num_tables <- 2  # Number of available tables
+meal_price <- 50  # Price per meal
+chef_wage_per_hour <- 40  # Chef wage per hour
+operating_hours <- 12  # From 10 AM to 10 PM
+
+# Define time breaks in hours from 10 AM (0 hours from start)
+time_breaks <- c(0, 2, 4, 8, 10, 12)  # 10 AM to 12 PM, 12 PM to 2 PM, 3 PM to 6 PM, 6 PM to 8 PM, 8 PM to 10 PM
+rates <- c(10, 30, 10, 30, 10)  # lambda_morning_afternoon_night, lambda_peak
+
+# Number of chefs and corresponding service rates
+num_chefs_off_peak <- 2
+num_chefs_peak <- 4  # Increased number during peak hours
+lambda_S_off_peak <- 3 * num_chefs_off_peak  # Service rate off-peak
+lambda_S_peak <- 3 * num_chefs_peak  # Service rate peak
+
+```
+
+```{r}
+
+simulate_day <- function(seed) {
+  set.seed(seed)  # for reproducibility
+
+  arrival_times <- numeric(0)
+  service_times <- numeric(0)
+  
+  # Generate arrivals and service times for each time interval
+  for (i in 1:(length(time_breaks) - 1)) {
+    start_time <- time_breaks[i]
+    end_time <- time_breaks[i + 1]
+    rate <- rates[i]
+    current_arrivals <- generate_arrivals(start_time, end_time, rate)
+    arrival_times <- c(arrival_times, current_arrivals)
+    
+    # Determine service rate based on time
+    lambda_S <- ifelse(rate == 30, lambda_S_peak, lambda_S_off_peak)  # Determine service rate
+    current_service_times <- rexp(length(current_arrivals), rate = lambda_S)
+    service_times <- c(service_times, current_service_times)
+  }
+
+  # Proceed with waiting times and service completion
+  waiting_times <- rep(0, length(arrival_times))
+
+  for (i in 1:length(arrival_times)) {
+    if (i > num_tables) {
+      indices = (i-num_tables):(i-1)
+      if (length(indices) > 0) {
+        previous_finishes <- arrival_times[indices] + waiting_times[indices] + service_times[indices]
+        if (!any(is.na(previous_finishes)) && min(previous_finishes) > arrival_times[i]) {
+          waiting_times[i] <- min(previous_finishes) - arrival_times[i]
+        }
+      }
+    }
+  }
+
+  start_service_times <- arrival_times + waiting_times
+  finish_service_times <- start_service_times + service_times
+
+  # Exclude customers whose service would start after operating hours
+  valid_indices <- start_service_times <= operating_hours
+
+  data.frame(
+    Customer = 1:sum(valid_indices),
+    ArrivalTime = arrival_times[valid_indices],
+    ServiceTime = service_times[valid_indices],
+    WaitingTime = waiting_times[valid_indices],
+    StartServiceTime = start_service_times[valid_indices],
+    FinishServiceTime = finish_service_times[valid_indices]
+  )
+}
+
+collect_multiple_days_data <- function(num_days) {
+  all_days_results <- lapply(1:num_days, simulate_day)
+  combined_results <- do.call(rbind, all_days_results)
+  combined_results$Day <- rep(1:num_days, sapply(all_days_results, nrow))
+  return(combined_results)
+}
+```
+
+```{r}
+to_hours_minutes <- function(time_in_hours) {
+  hours <- floor(time_in_hours)
+  minutes <- round((time_in_hours - hours) * 60)
+  return(sprintf("%02d:%02d", hours, minutes))
+}
+
+results <- collect_multiple_days_data(500)
+
+formatted_results <- results
+formatted_results$ArrivalTime <- sapply(formatted_results$ArrivalTime, to_hours_minutes)
+formatted_results$ServiceTime <- sapply(formatted_results$ServiceTime, to_hours_minutes)
+formatted_results$WaitingTime <- sapply(formatted_results$WaitingTime, to_hours_minutes)
+formatted_results$StartServiceTime <- sapply(formatted_results$StartServiceTime, to_hours_minutes)
+formatted_results$FinishServiceTime <- sapply(formatted_results$FinishServiceTime, to_hours_minutes)
+
+# Now the formatted_results dataframe is ready for display or reporting
+print(formatted_results)
+```
+
+```{r}
+
+summary_stats <- results %>%
+  summarise(
+    MinWaitingTime = min(WaitingTime),
+    MaxWaitingTime = max(WaitingTime),
+    MeanWaitingTime = mean(WaitingTime),
+    sdWt = sd(WaitingTime)
+  )
+
+print(summary_stats)
+```
+
+```{r}
+results$TenthHourOfDay <- round(results$StartServiceTime * 10) / 10
+
+# Group by TenthHourOfDay and calculate mean waiting time
+average_waiting_times_by_tenth_hour <- results %>%
+  group_by(TenthHourOfDay) %>%
+  summarise(MeanWaitingTime = mean(WaitingTime, na.rm = TRUE))  # Ensure NA values are ignored
+
+# Plotting the mean waiting times throughout the day
+ggplot(average_waiting_times_by_tenth_hour, aes(x = TenthHourOfDay, y = MeanWaitingTime)) +
+  geom_smooth(method = "loess", color = "red", se = FALSE) +  # Add a smooth line (LOESS)
+  labs(title = "Mean Waiting Time With Constant Chefs (2)",
+       x = "Time of Day (hours)",
+       y = "Mean Waiting Time (hours)") +
+  theme_minimal()
+```
+
+```{r}
+variance_waiting_times_by_tenth_hour <- results %>%
+  group_by(TenthHourOfDay) %>%
+  summarise(VarianceWaitingTime = var(WaitingTime, na.rm = TRUE))  # Ensure NA values are ignored
+
+ggplot(variance_waiting_times_by_tenth_hour, aes(x = TenthHourOfDay, y = VarianceWaitingTime)) +
+  geom_smooth(method = "loess", color = "red", se = FALSE) +  # Add a smooth line (LOESS)
+  labs(title = "Variance in Waiting Time by Time of Day (λS = 9)",
+       x = "Time of Day (hours)",
+       y = "Variance in Waiting Time") +
+  theme_minimal()
+```
+
+```{r}
+
+# Initialize a vector to store the total number of customers being served at each minute of the day
+total_customers_being_served <- rep(0, operating_hours * 60)
+
+# Simulate multiple days and calculate the total number of customers being served each minute
+for (day in 1:num_days) {
+  day_results <- simulate_day(day)
+  
+  # Convert start and finish service times to minutes
+  start_minutes <- as.integer(day_results$StartServiceTime * 60)
+  end_minutes <- as.integer(day_results$FinishServiceTime * 60)
+  
+  # Increment the number of customers being served for each minute between start and finish service times
+  for (i in seq_along(start_minutes)) {
+    if (start_minutes[i] <= end_minutes[i]) {
+      total_customers_being_served[start_minutes[i]:end_minutes[i]] <- total_customers_being_served[start_minutes[i]:end_minutes[i]] + 1
+    }
+  }
+}
+
+# Calculate the average number of customers in line (exceeding the number of tables) for each minute of the day across all days
+average_customers_in_line <- pmax(total_customers_being_served / num_days - num_tables, 0)
+
+# Create a sequence of time points corresponding to each minute of the day
+time_points <- seq(0, operating_hours * 60 - 1)
+
+average_customers_in_line <- head(average_customers_in_line, length(time_points))
+
+# Plot the average number of customers in line throughout times of the day
+plot(time_points / 60, average_customers_in_line, type = "l", col = "blue",
+     xlab = "Time (hours)", ylab = "Average Number of Customers in Line",
+     main = "Average Number of Customers in Line Throughout the Day")
+
+```
+
+[This plot isn't informative when the kitchen never catches up to demand, as our start/finish serving times don't count the people that waited in line and never got sat. For those situations, use the plot above.]{.underline}
+
+```{r}
+
+average_customers_being_served <- pmax(total_customers_being_served / num_days, 0)
+
+# Create a sequence of time points corresponding to each minute of the day
+time_points <- seq(0, operating_hours * 60 - 1)
+
+average_customers_being_served <- head(average_customers_being_served, length(time_points))
+
+# Plot the average number of customers in line throughout times of the day
+plot(time_points / 60, average_customers_being_served, type = "l", col = "blue",
+     xlab = "Time (hours)", ylab = "Average Number of Customers Being Served",
+     main = "Average Number of Customers Being Served Throughout the Day")
+```
+
+This plot visualizes downtime in off-peak hours.
+
+#### Balance Sheet for peak hour situation
+
+```{r}
+
+hours_per_rate <- diff(time_breaks)
+peak_hours <- sum(hours_per_rate[rates != 10])
+off_peak_hours <- sum(hours_per_rate[rates == 10])
+
+# Calculate wages for peak and off-peak hours
+wages_peak <- num_chefs_peak * chef_wage_per_hour * peak_hours
+wages_off_peak <- num_chefs_off_peak * chef_wage_per_hour * off_peak_hours
+
+# Total wages
+daily_wages <- wages_peak + wages_off_peak
+
+
+# Collect the number of customers served each day
+daily_customers_served <- aggregate(Customer ~ Day, data = results, FUN = length)
+
+# Calculate daily revenue and wages
+daily_revenue <- daily_customers_served$Customer * meal_price
+
+# Calculate daily profit
+daily_profits <- daily_revenue - daily_wages
+
+# Plot histogram of daily profits
+hist(daily_profits, col = "blue", main = "Histogram of Daily Profits With Part Time ", xlab = "Profit ($)", breaks = 100)
+```
+
+```{r}
+
+# Calculate mean, standard deviation, and variance of daily profits
+mean_profits <- mean(daily_profits)
+sd_profits <- sd(daily_profits)
+variance_profits <- var(daily_profits)
+
+# Display the results
+print(paste("Mean of Daily Profits:", mean_profits))
+print(paste("Standard Deviation of Daily Profits:", sd_profits))
+print(paste("Variance of Daily Profits:", variance_profits))
+
+# Check a sample of daily profits to spot any anomalies
+print(min(daily_profits))
+print(max(daily_profits))
+```
+
+[Last step from instructions:]{.underline} apply peak hours to our simulation
+
+[In office hours:]{.underline} get thoughts on current outline for the paper (this R document) and, if necessary, more directions to take it
+
+Comment on down time during the day - want down time - can make a plot of the number of customers in the restaurant using start service time and end service time. Then count the amount of time where you have no customers = downtime. Then simulate that over multiple days, and create a distribution of the amount of down time. (histogram, which is an estimate of the density).
+
+In the simulation, in addition to average profits and mean wait times, we want to also the variance to determine that even if wait times or lower or profits are higher, what is the variance for these parameters.
+
+Test:
+
+2 tables, 1 chef always, 30 peak, 10 off peak: mean profit = 4828; SD = 652.2936
+
+2 tables, 1 chef off, 5 chefs on, 10 off, 30 on: mean profit = 8336; SD = 801
+
+2 tables, 5 chef off, 5 chef on, 10 off, 30 on: mean profit = 7544; SD = 700
+
+**These results are great!! Shows the value of hiring part time chefs in peak hours to maximize profits!**
